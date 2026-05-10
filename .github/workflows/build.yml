@@ -29,14 +29,32 @@ jobs:
       - name: Install dependencies
         run: poetry install
 
+      - name: Build icon (Windows)
+        if: runner.os == 'Windows'
+        run: poetry run python build_icons.py
+
+      - name: Build icon (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p icon.iconset
+          for size in 16 32 64 128 256 512; do
+            sips -z $size $size gaga_logo.png --out icon.iconset/icon_${size}x${size}.png
+          done
+          sips -z 32  32  gaga_logo.png --out icon.iconset/icon_16x16@2x.png
+          sips -z 64  64  gaga_logo.png --out icon.iconset/icon_32x32@2x.png
+          sips -z 256 256 gaga_logo.png --out icon.iconset/icon_128x128@2x.png
+          sips -z 512 512 gaga_logo.png --out icon.iconset/icon_256x256@2x.png
+          sips -z 1024 1024 gaga_logo.png --out icon.iconset/icon_512x512@2x.png
+          iconutil -c icns icon.iconset -o icon.icns
+
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: poetry run pyinstaller --onefile --windowed --name "jewelry-tool" jewelry_tool.py
+        run: poetry run pyinstaller --onefile --windowed --icon icon.ico --name "jewelry-tool" jewelry_tool.py
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
         run: |
-          poetry run pyinstaller --onedir --windowed --name "jewelry-tool" jewelry_tool.py
+          poetry run pyinstaller --onedir --windowed --icon icon.icns --name "jewelry-tool" jewelry_tool.py
           cd dist && zip -r "jewelry-tool-macOS.zip" "jewelry-tool.app"
 
       - name: Upload Windows artifact
