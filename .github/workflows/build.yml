@@ -1,0 +1,54 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: poetry run pyinstaller --onefile --windowed --name "jewelry-tool" jewelry_tool.py
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          poetry run pyinstaller --onedir --windowed --name "jewelry-tool" jewelry_tool.py
+          cd dist && zip -r "jewelry-tool-macOS.zip" "jewelry-tool.app"
+
+      - name: Upload Windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows
+          path: dist/jewelry-tool.exe
+
+      - name: Upload macOS artifact
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS
+          path: dist/jewelry-tool-macOS.zip

@@ -4,3 +4,13 @@ __pycache__/
 *.pyd
 
 .claude/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# 使用者設定檔（本機資料，不 commit）
+config.json
+vendors.csv
+markups.csv

@@ -9,6 +9,7 @@ import csv
 import json
 import os
 import subprocess
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -45,8 +46,14 @@ def get_font(size):
 
 # ─── 廠商 CSV ────────────────────────────────────────────────────────────────
 
-VENDORS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendors.csv")
-CONFIG_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+def _base_dir() -> str:
+    """打包成 .exe 後用 sys.executable 路徑，開發時用 __file__ 路徑"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+VENDORS_FILE = os.path.join(_base_dir(), "vendors.csv")
+CONFIG_FILE  = os.path.join(_base_dir(), "config.json")
 
 def load_config() -> dict:
     if os.path.exists(CONFIG_FILE):
@@ -77,7 +84,7 @@ def save_vendors(vendors: list[dict]):
 
 # ─── 加成區間 CSV ─────────────────────────────────────────────────────────────
 
-MARKUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "markups.csv")
+MARKUPS_FILE = os.path.join(_base_dir(), "markups.csv")
 
 def load_markups() -> list[dict]:
     """回傳 [{"min_price": ..., "max_price": ..., "markup": ...}, ...]，依 min_price 排序"""
