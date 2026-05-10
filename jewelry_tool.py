@@ -381,10 +381,20 @@ def overlay_image(src_path: str, data: dict, output_path: str):
     bar = Image.new("RGBA", (w, bar_h), (15, 15, 15, 210))
     draw = ImageDraw.Draw(bar)
 
-    # 字體大小依圖片寬度自動縮放
+    # 字體大小依圖片寬度計算初始值
     name_sz  = max(26, int(w * 0.048))
     sub_sz   = max(19, int(w * 0.033))
     price_sz = max(30, int(w * 0.055))
+
+    # 等比縮放：確保三行文字加上行距能放入 bar（保留上下各 10% padding）
+    line_gaps   = 22                          # 兩個行間距 (10 + 12)
+    max_text_h  = bar_h - int(bar_h * 0.20)  # 可用文字高度
+    total_text_h = name_sz + sub_sz + price_sz + line_gaps
+    if total_text_h > max_text_h:
+        scale    = max_text_h / total_text_h
+        name_sz  = int(name_sz  * scale)
+        sub_sz   = int(sub_sz   * scale)
+        price_sz = int(price_sz * scale)
 
     padding = int(w * 0.03)
     y = int(bar_h * 0.1)
@@ -437,8 +447,8 @@ class JewelryApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("珠寶代購圖片工具")
-        self.root.geometry("1050x720")
-        self.root.minsize(800, 580)
+        self.root.geometry("1200x720")
+        self.root.minsize(900, 560)
 
         self.image_paths: list[str] = []
         self.image_data: dict[str, dict] = {}
@@ -469,7 +479,7 @@ class JewelryApp:
         paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
         # ── 左側：圖片列表 ──
-        left = ttk.Frame(paned, width=210)
+        left = ttk.Frame(paned, width=260)
         paned.add(left, weight=0)
 
         ttk.Label(left, text="圖片列表", font=("", 11, "bold")).pack(anchor=tk.W, pady=(0, 4))
@@ -487,38 +497,37 @@ class JewelryApp:
         ttk.Button(left, text="＋ 新增圖片", command=self.add_images).pack(fill=tk.X, pady=(6, 2))
         ttk.Button(left, text="✕ 移除選取", command=self.remove_selected).pack(fill=tk.X)
 
-        # ── 右側：預覽 + 表單 ──
-        right = ttk.Frame(paned)
-        paned.add(right, weight=1)
+        # ── 中欄：預覽 ──
+        middle = ttk.Frame(paned)
+        paned.add(middle, weight=1)
 
-        # 預覽區
-        pf = ttk.LabelFrame(right, text="預覽", padding=6)
-        pf.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        pf = ttk.LabelFrame(middle, text="預覽", padding=6)
+        pf.pack(fill=tk.BOTH, expand=True)
         self.preview_label = ttk.Label(pf, text="← 從左側新增並選擇圖片", anchor=tk.CENTER)
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         pf.bind("<Configure>", lambda e: self._refresh_preview())
 
-        # 表單區
-        form_frame = ttk.LabelFrame(right, text="商品資訊", padding=10)
-        form_frame.pack(fill=tk.X)
+        # ── 右欄：商品資訊 + 定價計算 ──
+        right = ttk.Frame(paned, width=400)
+        paned.add(right, weight=0)
 
-        # 左欄：文字欄位
-        col1 = ttk.Frame(form_frame)
-        col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 16))
+        # 商品資訊
+        form_frame = ttk.LabelFrame(right, text="商品資訊", padding=10)
+        form_frame.pack(fill=tk.X, pady=(0, 6))
 
         self.vars: dict[str, tk.StringVar] = {}
         for label, key in self.FIELDS:
-            row = ttk.Frame(col1)
+            row = ttk.Frame(form_frame)
             row.pack(fill=tk.X, pady=3)
-            ttk.Label(row, text=label, width=10, anchor=tk.W).pack(side=tk.LEFT)
+            ttk.Label(row, text=label, width=8, anchor=tk.W).pack(side=tk.LEFT)
             v = tk.StringVar()
             v.trace_add("write", lambda *a, k=key: self._on_text_field_change(k))
             ttk.Entry(row, textvariable=v).pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.vars[key] = v
 
-        # 右欄：定價計算
-        col2 = ttk.LabelFrame(form_frame, text="定價計算", padding=8)
-        col2.pack(side=tk.LEFT, fill=tk.Y)
+        # 定價計算
+        col2 = ttk.LabelFrame(right, text="定價計算", padding=8)
+        col2.pack(fill=tk.X)
 
         # 預設匯率
         rate_row = ttk.Frame(col2)
