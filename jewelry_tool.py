@@ -489,10 +489,12 @@ class JewelryApp:
         sb = ttk.Scrollbar(lf)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.listbox = tk.Listbox(lf, yscrollcommand=sb.set, activestyle="dotbox",
-                                  selectmode=tk.SINGLE, font=("", 10))
+                                  selectmode=tk.EXTENDED, font=("", 10))
         self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.config(command=self.listbox.yview)
         self.listbox.bind("<<ListboxSelect>>", self._on_list_select)
+        self.listbox.bind("<Control-a>", self._select_all)
+        self.listbox.bind("<Command-a>", self._select_all)  # macOS
 
         ttk.Button(left, text="＋ 新增圖片", command=self.add_images).pack(fill=tk.X, pady=(6, 2))
         ttk.Button(left, text="✕ 移除選取", command=self.remove_selected).pack(fill=tk.X)
@@ -674,18 +676,26 @@ class JewelryApp:
         sel = self.listbox.curselection()
         if not sel:
             return
-        idx = sel[0]
-        path = self.image_paths.pop(idx)
-        del self.image_data[path]
-        self.listbox.delete(idx)
+        # 從後往前刪，避免 index 位移
+        for idx in reversed(sel):
+            path = self.image_paths.pop(idx)
+            del self.image_data[path]
+            self.listbox.delete(idx)
         self.current_path = None
         self._clear_form()
 
     # ── 選取圖片 ──────────────────────────────────────────────────────────────
 
+    def _select_all(self, _event=None):
+        self.listbox.selection_set(0, tk.END)
+        return "break"  # 防止系統預設行為覆蓋
+
     def _on_list_select(self, _event):
         sel = self.listbox.curselection()
         if not sel:
+            return
+        # 多選時不切換表單，單選才載入對應圖片資訊
+        if len(sel) != 1:
             return
         if self.current_path:
             self._save_current()
