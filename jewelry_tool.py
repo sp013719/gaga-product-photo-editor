@@ -450,11 +450,13 @@ class JewelryApp:
         self.root.geometry("1200x720")
         self.root.minsize(900, 560)
 
-        self.image_paths: list[str] = []
-        self.image_data: dict[str, dict] = {}
-        self.current_path: str | None = None
+        # 商品群組資料模型
+        self.products: list[dict] = []
+        self.current_product_idx: int | None = None
+        self.current_image_path: str | None = None
+
         self._preview_photo = None
-        self._loading_form = False  # 防止 trace 迴圈
+        self._loading_form = False
         self.vendors: list[dict] = load_vendors()
         self.markups: list[dict] = load_markups()
         self._auto_filling_markup = False
@@ -478,25 +480,26 @@ class JewelryApp:
         paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
-        # ── 左側：圖片列表 ──
+        # ── 左側：商品/圖片樹狀列表 ──
         left = ttk.Frame(paned, width=260)
         paned.add(left, weight=0)
 
-        ttk.Label(left, text="圖片列表", font=("", 11, "bold")).pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(left, text="商品列表", font=("", 11, "bold")).pack(anchor=tk.W, pady=(0, 4))
 
-        lf = ttk.Frame(left)
-        lf.pack(fill=tk.BOTH, expand=True)
-        sb = ttk.Scrollbar(lf)
+        tree_frame = ttk.Frame(left)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        sb = ttk.Scrollbar(tree_frame)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self.listbox = tk.Listbox(lf, yscrollcommand=sb.set, activestyle="dotbox",
-                                  selectmode=tk.EXTENDED, font=("", 10))
-        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb.config(command=self.listbox.yview)
-        self.listbox.bind("<<ListboxSelect>>", self._on_list_select)
-        self.listbox.bind("<Control-a>", self._select_all)
-        self.listbox.bind("<Command-a>", self._select_all)  # macOS
+        self.tree = ttk.Treeview(tree_frame, yscrollcommand=sb.set,
+                                  show="tree", selectmode="extended")
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.config(command=self.tree.yview)
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<Control-a>", self._select_all)
+        self.tree.bind("<Command-a>", self._select_all)  # macOS
 
-        ttk.Button(left, text="＋ 新增圖片", command=self.add_images).pack(fill=tk.X, pady=(6, 2))
+        ttk.Button(left, text="＋ 新增商品", command=self.add_product).pack(fill=tk.X, pady=(6, 2))
+        ttk.Button(left, text="＋ 新增圖片", command=self.add_images).pack(fill=tk.X, pady=(0, 2))
         ttk.Button(left, text="✕ 移除選取", command=self.remove_selected).pack(fill=tk.X)
 
         # ── 中欄：預覽 ──
@@ -505,7 +508,7 @@ class JewelryApp:
 
         pf = ttk.LabelFrame(middle, text="預覽", padding=6)
         pf.pack(fill=tk.BOTH, expand=True)
-        self.preview_label = ttk.Label(pf, text="← 從左側新增並選擇圖片", anchor=tk.CENTER)
+        self.preview_label = ttk.Label(pf, text="← 新增商品並選取圖片以預覽", anchor=tk.CENTER)
         self.preview_label.pack(fill=tk.BOTH, expand=True)
         pf.bind("<Configure>", lambda e: self._refresh_preview())
 
@@ -604,6 +607,149 @@ class JewelryApp:
         ttk.Entry(bot, textvariable=self.output_var, width=42).pack(side=tk.LEFT, padx=5)
         ttk.Button(bot, text="選擇", command=self._choose_output).pack(side=tk.LEFT)
 
+    # ── 商品管理 ──────────────────────────────────────────────────────────────
+
+    def _new_product(self) -> dict:
+        return {
+            "name": "", "material": "", "description": "",
+            "cost": "", "rate": self._default_rate, "discount": "",
+            "markup": "", "tax_included": "0", "tax_rate": "",
+            "final_price": "", "vendor_name": "（不選取）",
+            "images": [],
+        }
+
+    def add_product(self):
+        self._save_current()
+        product = self._new_product()
+        self.products.append(product)
+        idx = len(self.products) - 1
+        self._rebuild_tree()
+        piid = f"p:{idx}"
+        self.tree.selection_set(piid)
+        self.tree.see(piid)
+        self.current_product_idx = idx
+        self.current_image_path = None
+        self._load_product(idx)
+
+    def _rebuild_tree(self):
+        # 記住哪些節點是展開狀態
+        open_set = {iid for iid in self.tree.get_children("")
+                    if self.tree.item(iid, "open")}
+        self.tree.delete(*self.tree.get_children())
+        for i, p in enumerate(self.products):
+            name = p.get("name", "").strip() or f"（商品 {i + 1}）"
+            img_count = len(p["images"])
+            label = f"{name}  [{img_count}張]" if img_count else name
+            piid = f"p:{i}"
+            # 新商品預設展開；舊商品保持原本狀態（預設展開）
+            is_open = piid not in open_set or open_set  # 保持展開
+            self.tree.insert("", tk.END, iid=piid, text=label, open=True)
+            for j, img_path in enumerate(p["images"]):
+                self.tree.insert(piid, tk.END, iid=f"i:{i}:{j}",
+                                 text=os.path.basename(img_path))
+
+    def _update_tree_label(self, idx: int):
+        """更新指定商品節點的顯示文字（商品名稱變動時即時更新）"""
+        p = self.products[idx]
+        name = p.get("name", "").strip() or f"（商品 {idx + 1}）"
+        img_count = len(p["images"])
+        label = f"{name}  [{img_count}張]" if img_count else name
+        try:
+            self.tree.item(f"p:{idx}", text=label)
+        except tk.TclError:
+            pass
+
+    # ── 圖片管理 ──────────────────────────────────────────────────────────────
+
+    def add_images(self):
+        if self.current_product_idx is None:
+            messagebox.showwarning("提示", "請先選取或新增一個商品")
+            return
+        paths = filedialog.askopenfilenames(
+            title="選擇商品圖片",
+            filetypes=[("圖片檔", "*.jpg *.jpeg *.png *.JPG *.JPEG *.PNG"), ("所有檔案", "*.*")],
+        )
+        if not paths:
+            return
+        product = self.products[self.current_product_idx]
+        added = []
+        for p in paths:
+            if p not in product["images"]:
+                product["images"].append(p)
+                added.append(p)
+        if added:
+            self._rebuild_tree()
+            # 自動選取第一張新增的圖片
+            img_idx = product["images"].index(added[0])
+            iid = f"i:{self.current_product_idx}:{img_idx}"
+            self.tree.selection_set(iid)
+            self.tree.see(iid)
+            self.current_image_path = added[0]
+            self._refresh_preview()
+
+    def remove_selected(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        # 分類：要刪除的商品索引 vs 要刪除的圖片（僅在商品不被刪除時）
+        product_indices = {int(s.split(":")[1]) for s in sel if s.startswith("p:")}
+        image_removals: dict[int, list[int]] = {}
+        for s in sel:
+            if s.startswith("i:"):
+                parts = s.split(":")
+                pidx, iidx = int(parts[1]), int(parts[2])
+                if pidx not in product_indices:
+                    image_removals.setdefault(pidx, []).append(iidx)
+
+        # 先刪圖片（從後往前避免 index 位移）
+        for pidx, indices in image_removals.items():
+            if pidx < len(self.products):
+                for i in sorted(indices, reverse=True):
+                    if i < len(self.products[pidx]["images"]):
+                        self.products[pidx]["images"].pop(i)
+
+        # 再刪商品（從後往前）
+        for idx in sorted(product_indices, reverse=True):
+            if idx < len(self.products):
+                self.products.pop(idx)
+
+        self.current_product_idx = None
+        self.current_image_path = None
+        self._rebuild_tree()
+        self._clear_form()
+
+    # ── 樹狀選取 ──────────────────────────────────────────────────────────────
+
+    def _select_all(self, _event=None):
+        for piid in self.tree.get_children(""):
+            self.tree.selection_add(piid)
+            for ciid in self.tree.get_children(piid):
+                self.tree.selection_add(ciid)
+        return "break"
+
+    def _on_tree_select(self, _event):
+        focused = self.tree.focus()
+        if not focused:
+            return
+        if focused.startswith("p:"):
+            idx = int(focused.split(":")[1])
+            if idx != self.current_product_idx:
+                self._save_current()
+                self.current_product_idx = idx
+                self._load_product(idx)
+            self.current_image_path = None
+            self._refresh_preview()
+        elif focused.startswith("i:"):
+            parts = focused.split(":")
+            product_idx, image_idx = int(parts[1]), int(parts[2])
+            if product_idx != self.current_product_idx:
+                self._save_current()
+                self.current_product_idx = product_idx
+                self._load_product(product_idx)
+            self.current_image_path = self.products[product_idx]["images"][image_idx]
+            self._refresh_preview()
+
     # ── 廠商 ──────────────────────────────────────────────────────────────────
 
     def _save_default_rate(self):
@@ -617,10 +763,9 @@ class JewelryApp:
         rate = self.default_rate_var.get().strip()
         if not rate:
             return
-        for path in self.image_paths:
-            self.image_data[path]["rate"] = rate
-        # 更新目前顯示中的欄位
-        if self.current_path:
+        for p in self.products:
+            p["rate"] = rate
+        if self.current_product_idx is not None:
             self._loading_form = True
             self.vars["rate"].set(rate)
             self._loading_form = False
@@ -634,14 +779,17 @@ class JewelryApp:
 
     def _on_vendor_select(self, _event):
         name = self.vendor_var.get()
+        if self.current_product_idx is not None:
+            self.products[self.current_product_idx]["vendor_name"] = name
         for v in self.vendors:
             if v["name"] == name:
                 self._loading_form = True
                 self.vars["discount"].set(v["discount"])
                 self._loading_form = False
-                if self.current_path:
-                    self.image_data[self.current_path]["tax_included"] = v.get("tax_included", "0")
-                    self.image_data[self.current_path]["tax_rate"]     = v.get("tax_rate", "")
+                if self.current_product_idx is not None:
+                    p = self.products[self.current_product_idx]
+                    p["tax_included"] = v.get("tax_included", "0")
+                    p["tax_rate"]     = v.get("tax_rate", "")
                 self._on_price_input_change()
                 return
 
@@ -651,68 +799,19 @@ class JewelryApp:
             self._reload_vendor_dropdown()
         VendorDialog(self.root, on_save)
 
-    # ── 圖片管理 ──────────────────────────────────────────────────────────────
-
-    def add_images(self):
-        paths = filedialog.askopenfilenames(
-            title="選擇商品圖片",
-            filetypes=[("圖片檔", "*.jpg *.jpeg *.png *.JPG *.JPEG *.PNG"), ("所有檔案", "*.*")],
-        )
-        for p in paths:
-            if p not in self.image_paths:
-                self.image_paths.append(p)
-                self.image_data[p] = {k: "" for k in ["name", "material", "description",
-                                                        "cost", "rate", "discount", "markup",
-                                                        "tax_included", "tax_rate", "final_price"]}
-                self.image_data[p]["rate"] = self._default_rate
-                self.listbox.insert(tk.END, os.path.basename(p))
-
-        # 自動選取第一張
-        if paths and self.current_path is None:
-            self.listbox.selection_set(0)
-            self._on_list_select(None)
-
-    def remove_selected(self):
-        sel = self.listbox.curselection()
-        if not sel:
-            return
-        # 從後往前刪，避免 index 位移
-        for idx in reversed(sel):
-            path = self.image_paths.pop(idx)
-            del self.image_data[path]
-            self.listbox.delete(idx)
-        self.current_path = None
-        self._clear_form()
-
-    # ── 選取圖片 ──────────────────────────────────────────────────────────────
-
-    def _select_all(self, _event=None):
-        self.listbox.selection_set(0, tk.END)
-        return "break"  # 防止系統預設行為覆蓋
-
-    def _on_list_select(self, _event):
-        sel = self.listbox.curselection()
-        if not sel:
-            return
-        # 多選時不切換表單，單選才載入對應圖片資訊
-        if len(sel) != 1:
-            return
-        if self.current_path:
-            self._save_current()
-        self.current_path = self.image_paths[sel[0]]
-        self._load_form(self.current_path)
-        self._refresh_preview()
-
     # ── 表單讀寫 ──────────────────────────────────────────────────────────────
 
     def _on_text_field_change(self, key: str):
-        if self._loading_form or not self.current_path:
+        if self._loading_form or self.current_product_idx is None:
             return
-        self.image_data[self.current_path][key] = self.vars[key].get()
+        p = self.products[self.current_product_idx]
+        p[key] = self.vars[key].get()
+        if key == "name":
+            self._update_tree_label(self.current_product_idx)
 
     def _on_price_input_change(self):
         """cost / rate / discount 變動時：先自動查加成，再算售價"""
-        if self._loading_form or not self.current_path:
+        if self._loading_form or self.current_product_idx is None:
             return
         markup = self._lookup_markup()
         if markup is not None:
@@ -728,10 +827,10 @@ class JewelryApp:
             rate         = float(self.vars["rate"].get()     or 1)
             discount     = float(self.vars["discount"].get() or 100)
             intermediate = vendor_price * rate * (discount / 100)
-            if self.current_path:
-                data = self.image_data[self.current_path]
-                if data.get("tax_included") == "1":
-                    tax_rate = float(data.get("tax_rate") or 0)
+            if self.current_product_idx is not None:
+                p = self.products[self.current_product_idx]
+                if p.get("tax_included") == "1":
+                    tax_rate = float(p.get("tax_rate") or 0)
                     intermediate = intermediate / (1 + tax_rate / 100)
             return intermediate
         except (ValueError, ZeroDivisionError):
@@ -755,18 +854,18 @@ class JewelryApp:
         MarkupDialog(self.root, on_save)
 
     def _calc_and_save_price(self):
-        if self._loading_form or self._auto_filling_markup or not self.current_path:
+        if self._loading_form or self._auto_filling_markup or self.current_product_idx is None:
             return
+        p = self.products[self.current_product_idx]
         for key in ["cost", "rate", "discount", "markup"]:
-            self.image_data[self.current_path][key] = self.vars[key].get()
+            p[key] = self.vars[key].get()
         try:
             vendor_price = float(self.vars["cost"].get()     or 0)
             rate         = float(self.vars["rate"].get()     or 1)
             discount     = float(self.vars["discount"].get() or 100)
             markup       = float(self.vars["markup"].get()   or 0)
 
-            data     = self.image_data[self.current_path]
-            tax_rate = float(data.get("tax_rate") or 0) if data.get("tax_included") == "1" else 0
+            tax_rate = float(p.get("tax_rate") or 0) if p.get("tax_included") == "1" else 0
 
             # 原幣成本（折扣後退稅）
             original_cost = vendor_price * (discount / 100) / (1 + tax_rate / 100)
@@ -780,48 +879,77 @@ class JewelryApp:
 
             price_display = f"$ {final:,.0f}"
             self.price_label.config(text=price_display)
-            self.image_data[self.current_path]["final_price"] = price_display
+            p["final_price"] = price_display
         except (ValueError, TypeError):
             self.cost_label.config(text="--")
             self.price_label.config(text="--")
-            self.image_data[self.current_path]["final_price"] = ""
+            p["final_price"] = ""
 
     def _save_current(self):
-        if not self.current_path:
+        if self.current_product_idx is None:
             return
+        p = self.products[self.current_product_idx]
         for key in ["name", "material", "description"]:
-            self.image_data[self.current_path][key] = self.vars[key].get()
+            p[key] = self.vars[key].get()
+        p["vendor_name"] = self.vendor_var.get()
 
-    def _load_form(self, path: str):
+    def _load_product(self, idx: int):
         self._loading_form = True
-        data = self.image_data.get(path, {})
+        p = self.products[idx]
         for key in ["name", "material", "description", "cost", "rate", "discount", "markup"]:
-            self.vars[key].set(data.get(key, ""))
-        price = data.get("final_price", "")
+            self.vars[key].set(p.get(key, ""))
+        vendor_name = p.get("vendor_name", "（不選取）")
+        combo_values = self.vendor_combo["values"]
+        self.vendor_var.set(vendor_name if vendor_name in combo_values else "（不選取）")
+        price = p.get("final_price", "")
         self.price_label.config(text=price if price else "--")
         self._loading_form = False
+        # 重新計算成本顯示
+        self._recalc_display()
+
+    def _recalc_display(self):
+        """載入表單後重新計算並顯示成本/售價（不寫回資料）"""
+        if self.current_product_idx is None:
+            return
+        try:
+            p = self.products[self.current_product_idx]
+            vendor_price = float(self.vars["cost"].get()     or 0)
+            rate         = float(self.vars["rate"].get()     or 1)
+            discount     = float(self.vars["discount"].get() or 100)
+            markup       = float(self.vars["markup"].get()   or 0)
+            tax_rate     = float(p.get("tax_rate") or 0) if p.get("tax_included") == "1" else 0
+            original_cost = vendor_price * (discount / 100) / (1 + tax_rate / 100)
+            twd_cost      = original_cost * rate
+            final         = int(twd_cost * (1 + markup / 100) / 10 + 0.5) * 10
+            self.cost_label.config(text=f"$ {twd_cost:,.0f}  ({original_cost:,.0f})")
+            self.price_label.config(text=f"$ {final:,.0f}")
+        except (ValueError, TypeError):
+            self.cost_label.config(text="--")
 
     def _clear_form(self):
         self._loading_form = True
         for v in self.vars.values():
             v.set("")
+        self.vendor_var.set("（不選取）")
         self.cost_label.config(text="--")
         self.price_label.config(text="--")
-        self.preview_label.config(image="", text="← 從左側新增並選擇圖片")
+        self.preview_label.config(image="", text="← 新增商品並選取圖片以預覽")
         self._preview_photo = None
         self._loading_form = False
 
     # ── 預覽 ──────────────────────────────────────────────────────────────────
 
     def _refresh_preview(self):
-        if not self.current_path:
+        if not self.current_image_path:
+            self.preview_label.config(image="", text="← 選取圖片以預覽")
+            self._preview_photo = None
             return
         w = self.preview_label.winfo_width()
         h = self.preview_label.winfo_height()
         if w < 50 or h < 50:
             return
         try:
-            img = Image.open(self.current_path)
+            img = Image.open(self.current_image_path)
             img.thumbnail((w, h), Image.LANCZOS)
             self._preview_photo = ImageTk.PhotoImage(img)
             self.preview_label.config(image=self._preview_photo, text="")
@@ -838,8 +966,13 @@ class JewelryApp:
     def generate_all(self):
         self._save_current()
 
-        if not self.image_paths:
-            messagebox.showwarning("提示", "請先新增圖片")
+        if not self.products:
+            messagebox.showwarning("提示", "請先新增商品")
+            return
+
+        total_images = sum(len(p["images"]) for p in self.products)
+        if total_images == 0:
+            messagebox.showwarning("提示", "請先為商品新增圖片")
             return
 
         output_dir = self.output_var.get().strip()
@@ -851,21 +984,19 @@ class JewelryApp:
 
         success, skipped, errors = 0, 0, []
 
-        for path in self.image_paths:
-            data = self.image_data[path]
-            if not data.get("name") and not data.get("final_price"):
-                skipped += 1
+        for p in self.products:
+            if not p.get("name") and not p.get("final_price"):
+                skipped += len(p["images"])
                 continue
+            for img_path in p["images"]:
+                base = os.path.splitext(os.path.basename(img_path))[0]
+                out_path = os.path.join(output_dir, f"{base}_output.jpg")
+                try:
+                    overlay_image(img_path, p, out_path)
+                    success += 1
+                except Exception as e:
+                    errors.append(f"{os.path.basename(img_path)}: {e}")
 
-            base = os.path.splitext(os.path.basename(path))[0]
-            out_path = os.path.join(output_dir, f"{base}_output.jpg")
-            try:
-                overlay_image(path, data, out_path)
-                success += 1
-            except Exception as e:
-                errors.append(f"{os.path.basename(path)}: {e}")
-
-        # 結果訊息
         msg = f"完成！成功產生 {success} 張圖片。\n輸出位置：{output_dir}"
         if skipped:
             msg += f"\n（{skipped} 張未填寫資料，已略過）"
