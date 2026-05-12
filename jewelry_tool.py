@@ -596,6 +596,9 @@ class JewelryApp:
         ttk.Label(col2, text="售價 = 台幣成本 × (1 + 加成)",
                   font=("", 8), foreground="gray").pack(anchor=tk.W, pady=(4, 0))
 
+        ttk.Button(right, text="套用到選取的圖片",
+                   command=self._apply_to_selected).pack(fill=tk.X, pady=(8, 0))
+
         # 輸出路徑列
         bot = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         bot.pack(fill=tk.X)
@@ -671,6 +674,36 @@ class JewelryApp:
         if paths and self.current_path is None:
             self.listbox.selection_set(0)
             self._on_list_select(None)
+
+    def _apply_to_selected(self):
+        sel = self.listbox.curselection()
+        if not self.current_path:
+            messagebox.showwarning("提示", "請先點選一張圖片作為來源")
+            return
+        if not sel:
+            messagebox.showwarning("提示", "請在左側列表選取要套用的目標圖片")
+            return
+
+        self._save_current()
+
+        src = self.image_data[self.current_path]
+        fields = ["name", "material", "description",
+                  "cost", "rate", "discount", "markup",
+                  "tax_included", "tax_rate", "final_price"]
+
+        count = 0
+        for idx in sel:
+            path = self.image_paths[idx]
+            if path == self.current_path:
+                continue
+            for field in fields:
+                self.image_data[path][field] = src.get(field, "")
+            count += 1
+
+        if count:
+            messagebox.showinfo("完成", f"已套用到 {count} 張圖片")
+        else:
+            messagebox.showinfo("提示", "沒有其他圖片被選取")
 
     def remove_selected(self):
         sel = self.listbox.curselection()
