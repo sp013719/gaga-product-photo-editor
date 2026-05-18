@@ -15,6 +15,13 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+    FIREBASE_AVAILABLE = True
+except ImportError:
+    FIREBASE_AVAILABLE = False
+
 # ─── 字體 ────────────────────────────────────────────────────────────────────
 
 def _find_font():
@@ -44,7 +51,7 @@ def get_font(size):
     return ImageFont.load_default()
 
 
-# ─── 廠商 CSV ────────────────────────────────────────────────────────────────
+# ─── 路徑 & Firebase 初始化 ───────────────────────────────────────────────────
 
 def _base_dir() -> str:
     """打包成 .exe 後用 sys.executable 路徑，開發時用 __file__ 路徑"""
@@ -52,54 +59,88 @@ def _base_dir() -> str:
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-VENDORS_FILE = os.path.join(_base_dir(), "vendors.csv")
-CONFIG_FILE  = os.path.join(_base_dir(), "config.json")
+SERVICE_ACCOUNT_FILE = os.path.join(_base_dir(), "firebase_service_account.json")
+FIRESTORE_COLLECTION  = "jewelry-tool"
+FIRESTORE_DOC         = "shared"
+
+_db = None
+
+def _get_db():
+    global _db
+    if _db is not None:
+        return _db
+    if not FIREBASE_AVAILABLE:
+        raise RuntimeError("firebase-admin 套件未安裝，請執行 pip install firebase-admin")
+    if not os.path.exists(SERVICE_ACCOUNT_FILE):
+        raise FileNotFoundError(
+            f"找不到 Firebase 金鑰檔：{SERVICE_ACCOUNT_FILE}\n"
+            "請將 firebase_service_account.json 放在與程式相同的資料夾中。"
+        )
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(SERVICE_ACCOUNT_FILE)
+        firebase_admin.initialize_app(cred)
+    _db = firestore.client()
+    return _db
+
+
+def _shared_doc():
+    return _get_db().collection(FIRESTORE_COLLECTION).document(FIRESTORE_DOC)
+
+
+# ─── 設定 ─────────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+    try:
+        doc = _shared_doc().get()
+        if doc.exists:
+            return doc.to_dict().get("config", {})
+    except Exception as e:
+        messagebox.showwarning("Firebase 讀取失敗", f"無法讀取設定，使用預設值。\n{e}")
     return {}
 
 def save_config(cfg: dict):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    try:
+        _shared_doc().set({"config": cfg}, merge=True)
+    except Exception as e:
+        messagebox.showerror("Firebase 寫入失敗", f"設定未能儲存至雲端。\n{e}")
+
+
+# ─── 廠商 ─────────────────────────────────────────────────────────────────────
 
 def load_vendors() -> list[dict]:
-    """回傳 [{"name": ..., "discount": ...}, ...]"""
-    if not os.path.exists(VENDORS_FILE):
-        return []
-    with open(VENDORS_FILE, newline="", encoding="utf-8") as f:
-        return [r for r in csv.DictReader(f) if r.get("name")]
+    try:
+        doc = _shared_doc().get()
+        if doc.exists:
+            return doc.to_dict().get("vendors", [])
+    except Exception as e:
+        messagebox.showwarning("Firebase 讀取失敗", f"無法讀取廠商資料。\n{e}")
+    return []
 
 def save_vendors(vendors: list[dict]):
-    with open(VENDORS_FILE, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["name", "discount", "tax_included", "tax_rate"])
-        w.writeheader()
-        w.writerows(vendors)
+    try:
+        _shared_doc().set({"vendors": vendors}, merge=True)
+    except Exception as e:
+        messagebox.showerror("Firebase 寫入失敗", f"廠商資料未能儲存至雲端。\n{e}")
 
 
-# ─── 加成區間 CSV ─────────────────────────────────────────────────────────────
-
-MARKUPS_FILE = os.path.join(_base_dir(), "markups.csv")
+# ─── 加成區間 ─────────────────────────────────────────────────────────────────
 
 def load_markups() -> list[dict]:
-    """回傳 [{"min_price": ..., "max_price": ..., "markup": ...}, ...]，依 min_price 排序"""
-    if not os.path.exists(MARKUPS_FILE):
-        return []
-    with open(MARKUPS_FILE, newline="", encoding="utf-8") as f:
-        rows = [r for r in csv.DictReader(f) if r.get("markup")]
-    rows.sort(key=lambda r: float(r["min_price"] or 0))
-    return rows
+    try:
+        doc = _shared_doc().get()
+        if doc.exists:
+            rows = doc.to_dict().get("markups", [])
+            rows.sort(key=lambda r: float(r.get("min_price") or 0))
+            return rows
+    except Exception as e:
+        messagebox.showwarning("Firebase 讀取失敗", f"無法讀取加成資料。\n{e}")
+    return []
 
 def save_markups(markups: list[dict]):
-    with open(MARKUPS_FILE, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["min_price", "max_price", "markup"])
-        w.writeheader()
-        w.writerows(markups)
+    try:
+        _shared_doc().set({"markups": markups}, merge=True)
+    except Exception as e:
+        messagebox.showerror("Firebase 寫入失敗", f"加成資料未能儲存至雲端。\n{e}")
 
 
 # ─── 廠商管理視窗 ─────────────────────────────────────────────────────────────
